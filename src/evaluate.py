@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 import yaml
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.data.dataset import OilSpillDataset
@@ -41,7 +42,8 @@ def evaluate_model(name, cfg, loader, ckpt_path, vis_dir, device, limit=None, nu
     l_fp = l_tn = 0
     total_ms, n_patches, saved = 0.0, 0, 0
 
-    for i, batch in enumerate(loader):
+    pbar = tqdm(loader, total=limit or len(loader), desc=f"Eval {name}", leave=False, dynamic_ncols=True)
+    for i, batch in enumerate(pbar):
         if limit and i >= limit:
             break
         sar, env, mask = batch["sar"].to(device), batch["env"].to(device), batch["mask"].to(device)
@@ -72,6 +74,46 @@ def evaluate_model(name, cfg, loader, ckpt_path, vis_dir, device, limit=None, nu
     return res
 
 
+def run_evaluation(data_dir=None, out_dir=None, model=None, batch_size=None, limit_batches=None, config_path="configs/config.yaml"):
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    bs = batch_size or (2 if device.type == "cpu" else cfg["train"]["batch_size"])
+
+    patches_csv = str(Path(data_dir) / "processed/patches.csv") if data_dir else cfg["paths"]["patches_csv"]
+    env_csv = str(Path(data_dir) / "env_data.csv") if data_dir else cfg["paths"]["env_csv"]
+    ckpt_dir = Path(out_dir) / "checkpoints" if out_dir else Path(cfg["paths"]["checkpoints_dir"])
+    log_dir = Path(out_dir) / "logs" if out_dir else Path(cfg["paths"]["logs_dir"])
+    vis_dir = Path(out_dir) / "visuals" if out_dir else Path(cfg["paths"]["visuals_dir"])
+    log_dir.mkdir(parents=True, exist_ok=True)
+    vis_dir.mkdir(parents=True, exist_ok=True)
+
+    test_ds = OilSpillDataset(patches_csv, env_csv, "test", augment=False)
+    nw = 0 if limit_batches else cfg["train"]["num_workers"]
+    test_loader = DataLoader(test_ds, batch_size=bs, shuffle=False, num_workers=nw)
+
+    models = [model] if model else cfg["models"]
+    rows = []
+    for name in tqdm(models, desc="Evaluating", leave=False, dynamic_ncols=True):
+        ckpt = ckpt_dir / f"{name}_best.pt"
+        if not ckpt.exists():
+            tqdm.write(f"[Skip] Checkpoint not found: {ckpt}")
+            continue
+        res = evaluate_model(name, cfg, test_loader, ckpt, vis_dir, device, limit_batches)
+        rows.append(res)
+        tqdm.write(str(res))
+
+    if rows:
+        cols = ["Model", "IoU", "Dice", "Precision", "Recall", "F1", "FPR", "Lookalike_FPR", "Inference_ms"]
+        out_csv = log_dir / "comparison_results.csv"
+        df = pd.DataFrame(rows)[cols]
+        df.to_csv(out_csv, index=False)
+        tqdm.write(f"Saved results to {out_csv}")
+        return df
+    return pd.DataFrame()
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/config.yaml")
@@ -81,41 +123,7 @@ def main():
     p.add_argument("--batch_size", type=int, default=None)
     p.add_argument("--limit_batches", type=int, default=None)
     args = p.parse_args()
-
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    bs = args.batch_size or (2 if device.type == "cpu" else cfg["train"]["batch_size"])
-
-    patches_csv = str(Path(args.data_dir) / "processed/patches.csv") if args.data_dir else cfg["paths"]["patches_csv"]
-    env_csv = str(Path(args.data_dir) / "env_data.csv") if args.data_dir else cfg["paths"]["env_csv"]
-    ckpt_dir = Path(args.out_dir) / "checkpoints" if args.out_dir else Path(cfg["paths"]["checkpoints_dir"])
-    log_dir = Path(args.out_dir) / "logs" if args.out_dir else Path(cfg["paths"]["logs_dir"])
-    vis_dir = Path(args.out_dir) / "visuals" if args.out_dir else Path(cfg["paths"]["visuals_dir"])
-    log_dir.mkdir(parents=True, exist_ok=True)
-    vis_dir.mkdir(parents=True, exist_ok=True)
-
-    test_ds = OilSpillDataset(patches_csv, env_csv, "test", augment=False)
-    nw = 0 if args.limit_batches else cfg["train"]["num_workers"]
-    test_loader = DataLoader(test_ds, batch_size=bs, shuffle=False, num_workers=nw)
-
-    models = [args.model] if args.model else cfg["models"]
-    rows = []
-    for name in models:
-        ckpt = ckpt_dir / f"{name}_best.pt"
-        if not ckpt.exists():
-            print(f"[Skip] Checkpoint not found: {ckpt}")
-            continue
-        res = evaluate_model(name, cfg, test_loader, ckpt, vis_dir, device, args.limit_batches)
-        rows.append(res)
-        print(res)
-
-    if rows:
-        cols = ["Model", "IoU", "Dice", "Precision", "Recall", "F1", "FPR", "Lookalike_FPR", "Inference_ms"]
-        out_csv = log_dir / "comparison_results.csv"
-        pd.DataFrame(rows)[cols].to_csv(out_csv, index=False)
-        print(f"Saved results to {out_csv}")
+    run_evaluation(args.data_dir, args.out_dir, args.model, args.batch_size, args.limit_batches, args.config)
 
 
 if __name__ == "__main__":
