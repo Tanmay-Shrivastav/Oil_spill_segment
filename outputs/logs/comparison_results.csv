@@ -1,0 +1,2 @@
+Model,IoU,Dice,Precision,Recall,F1,FPR,Lookalike_FPR,Inference_ms
+proposed_model,0.0,0.0,0.0,0.0,0.0,0.902159,0.902159,249.19

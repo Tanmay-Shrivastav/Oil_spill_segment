@@ -1,0 +1,47 @@
+seed: 42
+
+paths:
+  splits_csv: data/splits.csv
+  env_csv: data/env_data.csv
+  env_scaler: data/env_scaler.pkl
+  processed_dir: data/processed
+  patches_csv: data/processed/patches.csv
+  sar_stats: data/processed/sar_stats.json
+  checkpoints_dir: outputs/checkpoints
+  logs_dir: outputs/logs
+  visuals_dir: outputs/visuals
+
+env:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  archive_url: "https://archive-api.open-meteo.com/v1/archive"
+  marine_url: "https://marine-api.open-meteo.com/v1/marine"
+  features:
+    - wind_speed
+    - u10
+    - v10
+    - swh
+    - sst
+
+preprocess:
+  patch_size: 512
+  sar_clip_min: -35.0
+  sar_clip_max: 5.0
+
+train:
+  batch_size: 16
+  epochs: 20
+  max_lr: 3.0e-4
+  weight_decay: 1.0e-4
+  patience: 5
+  num_workers: 4
+  bce_weight: 0.5
+  dice_weight: 0.5
+  film_dropout: 0.25
+
+models:
+  - unet
+  - deeplabv3plus
+  - attn_unet
+  - concat_unet
+  - proposed_model
